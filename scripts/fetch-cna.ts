@@ -1,4 +1,5 @@
 import Parser from "rss-parser";
+import { supabase } from "./supabase.ts";
 
 const CNA_TECH_FEED = "https://feeds.feedburner.com/rsscna/technology";
 
@@ -8,7 +9,6 @@ interface NormalizedArticle {
   title: string;
   summary: string | null;
   link: string;
-  image_url: string | null;
   published_at: string; // ISO 8601
 }
 
@@ -28,11 +28,16 @@ async function fetchCna(): Promise<NormalizedArticle[]> {
     title: item.title?.trim() ?? "",
     summary: stripHtml(item.contentSnippet ?? item.content),
     link: item.link ?? "",
-    image_url: item.enclosure?.url ?? null,
     published_at: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
   }));
 }
 
 const articles = await fetchCna();
 console.log(`fetched ${articles.length} articles from 中央社`);
-console.log(JSON.stringify(articles.slice(0, 3), null, 2));
+
+const { error, count } = await supabase
+  .from("articles")
+  .upsert(articles, { onConflict: "link", count: "exact" });
+
+if (error) throw error;
+console.log(`upserted ${count} rows into articles`);
