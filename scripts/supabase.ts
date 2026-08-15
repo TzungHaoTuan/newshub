@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import type { Database } from "./database.types.ts";
 
 process.loadEnvFile();
 
@@ -8,4 +9,4 @@ if (!url || !key) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY in .env");
 }
 
-export const supabase = createClient(url, key);
+export const supabase = createClient<Database>(url, key);
