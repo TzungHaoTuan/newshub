@@ -15,6 +15,7 @@ export type Database = {
           link: string;
           published_at: string;
           fetched_at: string;
+          duplicate_of: string | null;
         };
         Insert: {
           id?: string;
@@ -26,6 +27,7 @@ export type Database = {
           link: string;
           published_at: string;
           fetched_at?: string;
+          duplicate_of?: string | null;
         };
         Update: {
           id?: string;
@@ -37,6 +39,7 @@ export type Database = {
           link?: string;
           published_at?: string;
           fetched_at?: string;
+          duplicate_of?: string | null;
         };
         Relationships: [];
       };
