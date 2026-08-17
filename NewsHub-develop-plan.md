@@ -77,6 +77,7 @@
    - **語意重複（不同來源報導同一事件，連結不同）**：需要自己比對，但**只跟近期資料比對，不跟全部歷史比對**：
      1. 先用已建索引的 `published_at` 欄位，篩出資料庫裡「過去 24-48 小時內」的文章當候選集合，不管資料庫累積多少筆，實際參與比對的範圍都是固定的，不會隨時間變慢。
      2. 對候選集合做標題正規化（去標點符號、多餘空白），再做關鍵字 overlap 比對，例如標題詞彙重疊超過某個門檻（如 70%）就視為疑似重複，標記或合併顯示「多家媒體報導」。
+        **實作採用字元 bigram 的 overlap coefficient**（而非詞彙級比對）：中文沒有空格分詞，要做真正的詞彙 tokenization 得上斷詞函式庫，不符合這個規模的投入產出比；改用「每兩個字」切 bigram 集合，算交集除以較小集合大小，對長度差異較大的標題（例如同事件但一篇標題比較長）也還算穩健。門檻維持 70%。比對結果寫回新增的 `duplicate_of` 欄位（見第 5 節），指向被認定是同一事件的既有文章 `id`，不刪資料、留給前端之後做「多家媒體報導」的聚合顯示。
      3. 不需要上 NLP / 語意向量模型，MVP 階段字串層級的比對就夠，投入產出比更合理。
      4. **進階選項（非必做）**：Postgres 的 `pg_trgm` extension 可以對文字欄位建立相似度索引（trigram），讓模糊比對也能吃到索引加速。如果想在履歷上多一個「資料庫優化」的技術亮點可以加，但不是這個規模的專案必需品。
 5. Upsert 進資料庫（用 `link` 當作唯一鍵，避免重複寫入）
@@ -92,7 +93,7 @@
   | -------------- | ---- | ------------------------------------------------ |
   | 中央社 CNA     | 科技 | `https://feeds.feedburner.com/rsscna/technology` |
   | 自由時報 LTN   | 即時 | `https://news.ltn.com.tw/rss/all.xml`            |
-  | 公視新聞網 PTS | 新聞 | `https://about.pts.org.tw/rss/XML/newsfeed.xml`  |
+  | 公視新聞網 PTS | 新聞 | `https://news.pts.org.tw/xml/newsfeed.xml`（實測 `about.pts.org.tw` 那個網址會 301 導到這裡，且格式其實是 **Atom** 不是 RSS 2.0，欄位對應到 `rss-parser` 的 `summary`／`isoDate` 而非 `contentSnippet`／`pubDate`，直接用最終網址避免依賴轉址） |
 
   （中央社、自由時報都有更多分類可選，之後要擴充分類直接照同樣規則加即可。）
 
@@ -111,7 +112,7 @@ const { error } = await supabase
   .upsert(normalizedArticles, { onConflict: "link" });
 ```
 
-- **型別安全**：用 Supabase CLI 產生 TypeScript type（`supabase gen types typescript`），跟資料表結構同步，避免手寫欄位名稱打錯。這是選擇 supabase-js 而非 Prisma 後，仍要顧到型別安全的關鍵一步，記得排進開發流程，不要跳過。
+- **型別安全**：原計畫用 Supabase CLI 產生 TypeScript type（`supabase gen types typescript`）。實作時發現這需要另外申請 personal access token（CLI 走 Management API，跟平常寫入用的 `secret key` 是不同權限系統），且目前 dashboard 版面也沒有直接複製貼上的入口。改為**依照 Schema Visualizer 確認過的實際欄位，手寫 `Database` type**（`scripts/database.types.ts`，標了 `ponytail:` 註解說明原因），效果一樣有型別檢查，只是 schema 改了要記得手動同步，不會自動重新產生。之後 schema 變動頻繁再考慮換回 CLI + token 那條路。
 
 ### 4.3 API 層（Next.js Route Handler）
 
@@ -138,7 +139,7 @@ const { data } = await supabase
 
 ---
 
-## 5. 資料庫 Schema（草案）
+## 5. 資料庫 Schema（實際版本，Phase 1-3 執行後更新）
 
 ```sql
 create table articles (
@@ -149,9 +150,9 @@ create table articles (
   title text not null,
   summary text,
   link text not null unique,      -- 去重複用
-  image_url text,
   published_at timestamptz not null,
-  fetched_at timestamptz default now()
+  fetched_at timestamptz default now(),
+  duplicate_of uuid references articles(id)  -- 指向語意重複的「原始」文章，null 代表非重複（見 4.1）
 );
 
 create index idx_articles_published_at on articles (published_at desc);
@@ -159,26 +160,31 @@ create index idx_articles_category on articles (category);
 create index idx_articles_tags on articles using gin (tags);   -- 陣列欄位查詢用 GIN 索引
 ```
 
+**跟草案的差異**：
+- 拿掉了 `image_url`——三個選定來源裡 CNA 科技版實測完全沒有 item 層級的圖片欄位（無 `enclosure`），暫不需要這個欄位。之後如果自由時報／公視的來源確認有提供圖片，用 `alter table` 加回來即可。
+- 新增 `duplicate_of`，對應 4.1 節語意去重複的落地實作。
+- Table 有開 Row Level Security（RLS），未設任何 policy。因為所有存取（抓取 script、之後 Phase 4 的 API Route）都走 `secret key`（等同舊版的 `service_role`），本來就會繞過 RLS；開著 RLS 只是防呆——萬一以後不小心把 `publishable key`（等同舊版 `anon`）洩漏到前端，資料表預設仍是鎖住的。
+
 ---
 
 ## 6. 開發階段拆分（建議給 Claude Code 的任務切分方式）
 
-**Phase 1：資料抓取基礎**
+**Phase 1：資料抓取基礎** ✅ 已完成
 
 - 寫一支獨立 Node.js script，串接 1 個來源（先用中央社），parse + 正規化 + console.log 驗證
 - 確認 rss-parser 的欄位對應正確
 
-**Phase 2：資料庫整合**
+**Phase 2：資料庫整合** ✅ 已完成
 
 - 建 Supabase 專案 + table
 - Script 改為寫入 DB（upsert by link）
 - 手動跑一次，確認資料正確落地
 
-**Phase 3：多來源 + 去重複**
+**Phase 3：多來源 + 去重複** ✅ 已完成
 
 - 加入第 2、3 個來源（自由時報、公視）
 - 加上去重複邏輯
-- 設定 GitHub Actions cron，排程自動執行
+- 設定 GitHub Actions cron，排程自動執行（每 15 分鐘 + 手動觸發 `workflow_dispatch`，並加上 `concurrency`／`timeout-minutes` 保護，見第 7 節第 2 點）
 
 **Phase 4：API 層**
 
@@ -204,7 +210,7 @@ create index idx_articles_tags on articles using gin (tags);   -- 陣列欄位�
 目前規劃沒特別提到，但實作時大概率會遇到、也值得展示的細節：
 
 1. **抓取失敗的容錯機制**：某個來源 RSS 暫時打不通或格式改版時，不該讓整個排程 job fail，應該 try/catch 個別來源、記錄失敗、其他來源照常執行。
-2. **重複執行保護**：如果 cron job 執行時間超過排程間隔（例如抓取花超過 15 分鐘），要避免同時有兩個 job 在跑，可以簡單用「最後執行時間」記錄來判斷。
+2. **重複執行保護**：✅ Phase 3 已實作。沒有自己寫「最後執行時間」記錄，改用 GitHub Actions 原生的 `concurrency` 設定（`group` + `cancel-in-progress: false`）：同一 group 同時最多一個 run 在執行，新排程時間到了但前一個還沒跑完，就排隊等，不會兩個同時寫入 Supabase。另外加了 `timeout-minutes: 5`（正常執行只需幾秒），避免萬一真的卡住，GitHub 預設 6 小時才強制取消、卡住其間所有排程的問題。
 3. **圖片來源的可靠性**：新聞來源的圖片連結可能會過期或被防盜鏈擋掉，Next.js `next/image` 搭配 `remotePatterns` 設定要注意，必要時做 fallback 圖。
 4. **內容分類的一致性**：不同來源的分類命名不一致（例如「政治」vs「政治軍事」），需要一個 mapping table 統一成你自己的分類系統。
    （去重複的詳細做法已在 4.1 節說明：完全重複靠 unique constraint + upsert，語意重複靠「時間窗口 + 標題正規化比對」，避免隨資料量增加而變慢。）
