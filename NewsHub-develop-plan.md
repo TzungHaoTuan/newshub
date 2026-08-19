@@ -129,7 +129,24 @@ const { data } = await supabase
 ```
 
 - `GET /api/news/stream`：SSE endpoint，資料庫有新資料時推播事件給前端
-- **備選方案**：Supabase 本身有 Realtime 功能（監聽資料表變更），如果想再簡化開發，可以評估直接用 Supabase Realtime 訂閱取代自己寫的 SSE endpoint；但自己實作 SSE 更能展示你理解「push vs pull」的底層機制，履歷上也更好講清楚技術細節，建議維持原計畫自己寫
+
+**實作細節（Phase 4 已完成）**：
+
+Route Handler 回傳一個不會結束的 `ReadableStream`，連線建立當下記錄一個時間戳 `lastCheckedAt`。之後每 10 秒（`POLL_INTERVAL_MS`）查一次 `fetched_at > lastCheckedAt` 有沒有新資料，有的話用 `event: news\ndata: {...}\n\n` 的 SSE 格式推給前端，並把 `lastCheckedAt` 更新成現在。另外每 15 秒送一個 `: heartbeat\n\n` 註解行，避免中間的 proxy／瀏覽器判定連線閒置太久而自動斷開。前端斷線（關分頁、切換頁面、網路中斷）時，`request.signal` 會觸發 `abort` 事件，這時清掉兩個 `setInterval`、關閉 controller，釋放資源。
+
+**跟首頁初始載入的分工**：SSE 故意只推「連線建立之後」發生的新資料，不會把資料庫既有的資料倒出來——所以首頁第一次載入一定要靠 `/api/news`（SSR、拿得到現有資料、對 SEO 友善），SSE 只負責接續在那之後的即時更新，兩者互補、不能互相取代。
+
+**這個做法的效能天花板，以及為什麼還是這樣做**：
+
+這個輪詢式 SSE 的成本，是「查詢間隔 × 同時開著頁面的使用者數」——每一條 SSE 連線都各自每 10 秒查一次資料庫，10 個人同時看頁面，資料庫就要處理 10 條並行、幾乎一樣的查詢，而且是常駐輪詢，不是「真的有變更才查」。這是已知的擴展性上限，不是 bug；對這個專案的規模（demo、面試官看）完全沒問題，但值得誠實記錄，之後若要撐更大流量，有兩條更省資源的路。（`fetched_at` 已補上 index — `idx_articles_fetched_at` — 確保單次查詢本身是 indexed range scan，不會隨資料量增加變慢；沒解決的是「並發連線數 × 輪詢頻率」這個結構性成本，這只能靠換架構解決，不是加 index 能處理的問題。）
+
+| 方案 | 機制 | 優點 | 缺點 |
+| --- | --- | --- | --- |
+| **自寫 SSE + 輪詢**（目前採用） | 每條連線各自定時查 DB | 不依賴額外基礎設施；完全掌控推播邏輯與格式；最能展示你理解「連線如何維持」「push vs pull 差在哪」的底層機制 | 成本隨並發連線數線性增加；資料變動與查詢時機脫鉤（最多延遲一個輪詢間隔，這裡是 10 秒） |
+| **Postgres `LISTEN/NOTIFY`** | DB 有異動時主動通知監聽中的連線，事件驅動 | 不用輪詢，資料一變就推，延遲更低；查詢次數只跟「真的有異動」相關，不跟並發使用者數字掛勾 | 需要一個常駐 process 維持跟 DB 的 `LISTEN` 連線（Serverless Route Handler 這種「每次請求才啟動」的執行模型不天然適合，需要額外的常駐服務） |
+| **Supabase Realtime** | Supabase 內建，底層也是監聽 Postgres WAL（跟 `LISTEN/NOTIFY` 概念類似，但封裝好、能直接在前端訂閱） | 幾乎零後端程式碼，開發最快；原生支援 Serverless／前端直接訂閱，不用自己維護常駐連線 | 跳過了自己實作「維持連線」「推播格式」這幾個技術細節，履歷上比較難講清楚你懂底層在幹嘛；多一個對 Supabase 特定功能的依賴 |
+
+**這個專案的選擇**：維持自己寫 SSE + 輪詢。原因是這個 side project 的目的是投遞前端職缺、展示「你理解 push vs pull、SSE 連線怎麼維持」，換成 Supabase Realtime 雖然程式碼更少，但等於把整個技術亮點外包給平台，反而少了可以在面試講的細節。**升級路徑**：如果之後真的要處理明顯的並發流量，優先評估換成 Supabase Realtime（改動範圍小，只動 `/api/news/stream` 這支檔案），而不是自己維護 `LISTEN/NOTIFY` 的常駐服務——除非情境需要完全不依賴 Supabase 的可攜性，才考慮自己接 `LISTEN/NOTIFY`。
 
 ### 4.4 前端呈現
 
@@ -139,7 +156,7 @@ const { data } = await supabase
 
 ---
 
-## 5. 資料庫 Schema（實際版本，Phase 1-3 執行後更新）
+## 5. 資料庫 Schema（實際版本，Phase 1-4 執行後更新）
 
 ```sql
 create table articles (
@@ -158,12 +175,14 @@ create table articles (
 create index idx_articles_published_at on articles (published_at desc);
 create index idx_articles_category on articles (category);
 create index idx_articles_tags on articles using gin (tags);   -- 陣列欄位查詢用 GIN 索引
+create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪詢用（見 4.3），沒有這個 index 該查詢會全表掃描
 ```
 
 **跟草案的差異**：
 - 拿掉了 `image_url`——三個選定來源裡 CNA 科技版實測完全沒有 item 層級的圖片欄位（無 `enclosure`），暫不需要這個欄位。之後如果自由時報／公視的來源確認有提供圖片，用 `alter table` 加回來即可。
 - 新增 `duplicate_of`，對應 4.1 節語意去重複的落地實作。
-- Table 有開 Row Level Security（RLS），未設任何 policy。因為所有存取（抓取 script、之後 Phase 4 的 API Route）都走 `secret key`（等同舊版的 `service_role`），本來就會繞過 RLS；開著 RLS 只是防呆——萬一以後不小心把 `publishable key`（等同舊版 `anon`）洩漏到前端，資料表預設仍是鎖住的。
+- 新增 `idx_articles_fetched_at`——Phase 4 寫 SSE endpoint 時發現 `.gt("fetched_at", ...)` 這個查詢原本沒有 index 可用，補上避免資料量變大後全表掃描。
+- Table 有開 Row Level Security（RLS），未設任何 policy。因為所有存取（抓取 script、Phase 4 的 API Route）都走 `secret key`（等同舊版的 `service_role`），本來就會繞過 RLS；開著 RLS 只是防呆——萬一以後不小心把 `publishable key`（等同舊版 `anon`）洩漏到前端，資料表預設仍是鎖住的。
 
 ---
 
@@ -186,10 +205,11 @@ create index idx_articles_tags on articles using gin (tags);   -- 陣列欄位�
 - 加上去重複邏輯
 - 設定 GitHub Actions cron，排程自動執行（每 15 分鐘 + 手動觸發 `workflow_dispatch`，並加上 `concurrency`／`timeout-minutes` 保護，見第 7 節第 2 點）
 
-**Phase 4：API 層**
+**Phase 4：API 層** ✅ 已完成
 
-- 建立 `/api/news`，支援分類篩選、分頁
-- 建立 SSE endpoint
+- 建立 `/api/news`，支援分類篩選、分頁（實際還多做了 `tag` 篩選，並預設排除 `duplicate_of` 不為 null 的文章）
+- 建立 SSE endpoint（10 秒輪詢 + 15 秒 heartbeat，詳見 4.3 節的實作細節與取捨比較）
+- 順便把 Next.js App Router 掃進專案，`lib/supabase.ts` 讓抓取 script 跟 API Route 共用同一套 client
 
 **Phase 5：前端**
 
