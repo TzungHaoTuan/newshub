@@ -4,6 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
     "test": "echo \"Error: no test specified\" && exit 1",
     "fetch:news": "tsx scripts/fetch-news.ts"
   },
@@ -14,10 +18,19 @@
   "private": "true",
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
+    "next": "16.3.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "rss-parser": "^3.13.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4",
     "@types/node": "^26.2.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.1",
+    "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
