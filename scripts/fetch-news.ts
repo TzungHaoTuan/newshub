@@ -1,7 +1,7 @@
 import Parser from "rss-parser";
-import { supabase } from "./supabase.ts";
-import { SOURCES } from "./sources.ts";
-import { stripHtml, titleSimilarity, DUPLICATE_THRESHOLD } from "./normalize.ts";
+import { supabase } from "../lib/supabase";
+import { SOURCES } from "./sources";
+import { stripHtml, titleSimilarity, DUPLICATE_THRESHOLD } from "./normalize";
 
 interface NormalizedArticle {
   source: string;
