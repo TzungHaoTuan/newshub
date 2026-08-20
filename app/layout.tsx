@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Noto_Serif_TC, Noto_Sans_TC, JetBrains_Mono } from "next/font/google";
+import { SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 const display = Space_Grotesk({
@@ -27,8 +28,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "NewsHub — 多來源即時新聞聚合",
-  description: "中央社、自由時報、公視新聞網即時聚合，AI 主題標籤、多家媒體重複報導自動偵測。",
+  description: "中央社、自由時報、公視新聞網即時聚合，分類篩選、多家媒體重複報導自動偵測。",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
