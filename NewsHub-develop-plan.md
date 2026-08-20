@@ -148,11 +148,19 @@ Route Handler 回傳一個不會結束的 `ReadableStream`，連線建立當下�
 
 **這個專案的選擇**：維持自己寫 SSE + 輪詢。原因是這個 side project 的目的是投遞前端職缺、展示「你理解 push vs pull、SSE 連線怎麼維持」，換成 Supabase Realtime 雖然程式碼更少，但等於把整個技術亮點外包給平台，反而少了可以在面試講的細節。**升級路徑**：如果之後真的要處理明顯的並發流量，優先評估換成 Supabase Realtime（改動範圍小，只動 `/api/news/stream` 這支檔案），而不是自己維護 `LISTEN/NOTIFY` 的常駐服務——除非情境需要完全不依賴 Supabase 的可攜性，才考慮自己接 `LISTEN/NOTIFY`。
 
-### 4.4 前端呈現
+### 4.4 前端呈現 ✅ Phase 5 已完成
 
 - 首頁用 Server Component 抓初始資料（SEO 友善，有 SSR 內容可被爬蟲讀到）
 - 進頁後用 Client Component 訂閱 SSE，有新新聞時前端插入卡片並提示「有新新聞」
 - 篩選狀態（分類、來源、主題標籤）用 URL query sync（例如 `/news?tag=ai`），延續你在動物領養平台的做法，Server Component 直接依 query 渲染篩選後內容，對 SEO 友善
+
+**實際做法（跟草案的差異）**：
+
+- **路由用 `/`，不是 `/news`**：草案例句寫的是 `/news?tag=ai`，但既然新聞列表本身就是首頁，直接把篩選 query 掛在 `/` 上（`/?category=科技`），不用多一層 `/news` 路徑再導過去。
+- **Phase 5 UI 範圍縮小到分類篩選**：`/api/news` 早就支援 `source`／`tag` 篩選，但 §6 Phase 5 的清單只明確要求「分類篩選 UI」，所以這次只做分類 tabs（全部／科技／即時／新聞），來源跟主題標籤篩選先不做對應 UI（API 已經支援，之後要加只是多寫幾個 Link，不是重新設計）。
+- **「插入卡片」簡化成「提示 + 點擊刷新」**：沒有做「SSE 收到新資料就在前端手動 append DOM」這種雙軌渲染（Server Component 渲染一次、Client 端又要維護一份平行的文章清單狀態，容易兩邊對不齊）。做法是 SSE 收到新文章只累加一個計數、顯示橫幅「N 則新新聞・點擊更新」，使用者點下去呼叫 Next.js 的 `router.refresh()`，讓 Server Component 用原本那套查詢邏輯重新渲染一次——資料來源只有一個，不會有「兩份文章清單邏輯要對齊」的問題，UX 上也更符合原意的「提示」（不是靜默背景改動畫面）。
+- **共用元件**：`lib/articles.ts` 的 `getArticles()` 被 `/api/news` 和首頁 Server Component 兩邊共用，同一套篩選／分頁邏輯只寫一次。
+- **視覺方向**：抓「通訊社／新聞編輯室」的意象做視覺識別——`WIRE SERVICE` 字樣、Space Grotesk 做 wordmark、Noto Serif TC 做文章標題、JetBrains Mono 做時間戳與來源標籤，頂部一條會脈動的 LIVE 連線狀態列直接呼應 SSE 這個技術亮點，不是裝飾。
 
 ---
 
@@ -211,11 +219,11 @@ create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪�
 - 建立 SSE endpoint（10 秒輪詢 + 15 秒 heartbeat，詳見 4.3 節的實作細節與取捨比較）
 - 順便把 Next.js App Router 掃進專案，`lib/supabase.ts` 讓抓取 script 跟 API Route 共用同一套 client
 
-**Phase 5：前端**
+**Phase 5：前端** ✅ 已完成
 
 - Server Component 首屏渲染 + SEO metadata
 - 分類篩選 UI（URL sync）
-- SSE 訂閱、新資料提示
+- SSE 訂閱、新資料提示（做法細節與跟草案的差異，見 4.4 節）
 
 **Phase 6：打磨**
 
