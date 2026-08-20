@@ -161,6 +161,7 @@ Route Handler 回傳一個不會結束的 `ReadableStream`，連線建立當下�
 - **「插入卡片」簡化成「提示 + 點擊刷新」**：沒有做「SSE 收到新資料就在前端手動 append DOM」這種雙軌渲染（Server Component 渲染一次、Client 端又要維護一份平行的文章清單狀態，容易兩邊對不齊）。做法是 SSE 收到新文章只累加一個計數、顯示橫幅「N 則新新聞・點擊更新」，使用者點下去呼叫 Next.js 的 `router.refresh()`，讓 Server Component 用原本那套查詢邏輯重新渲染一次——資料來源只有一個，不會有「兩份文章清單邏輯要對齊」的問題，UX 上也更符合原意的「提示」（不是靜默背景改動畫面）。
 - **共用元件**：`lib/articles.ts` 的 `getArticles()` 被 `/api/news` 和首頁 Server Component 兩邊共用，同一套篩選／分頁邏輯只寫一次。
 - **視覺方向**：抓「通訊社／新聞編輯室」的意象做視覺識別——`WIRE SERVICE` 字樣、Space Grotesk 做 wordmark、Noto Serif TC 做文章標題、JetBrains Mono 做時間戳與來源標籤，頂部一條會脈動的 LIVE 連線狀態列直接呼應 SSE 這個技術亮點，不是裝飾。
+- **JSON-LD 用 `ItemList`，不是逐篇 `NewsArticle`（Phase 6）**：因為版權合規要求（見 4.2）卡片一律連回原文，沒有站內的文章詳情頁，所以沒有「每篇文章一個獨立頁面、各自帶 `NewsArticle` structured data」這種結構。改成在列表頁本身輸出一個 `ItemList`，裡面每個 `ListItem` 包一個 `NewsArticle`（`headline`／`url`／`datePublished`／`publisher` 指向原文），準確描述「這是一個新聞列表頁」，而不是假裝有文章詳情頁。
 
 ---
 
@@ -225,11 +226,12 @@ create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪�
 - 分類篩選 UI（URL sync）
 - SSE 訂閱、新資料提示（做法細節與跟草案的差異，見 4.4 節）
 
-**Phase 6：打磨**
+**Phase 6：打磨** ✅ 已完成
 
-- SEO：`generateMetadata`、sitemap、JSON-LD（NewsArticle schema）
-- 錯誤處理：來源掛掉、格式異常時的容錯（不能讓一個來源壞掉拖垮整個抓取流程）
-- README：清楚寫明架構、版權合規說明、技術取捨（為何用 GitHub Actions 而非 AWS 等）
+- SEO：`generateMetadata`（分類篩選頁各自標題／canonical）、`app/sitemap.ts`、`app/robots.ts`、JSON-LD（因為沒有站內文章詳情頁，改用 `ItemList` 包 `NewsArticle` 標記整個列表，而非逐篇獨立標記，見 4.4 節）
+- 錯誤處理：Phase 3 已實作單一來源 try/catch，Phase 6 確認無需額外修改
+- 順便補了 §7 提到的兩個低成本項目：RSS 請求帶自訂 User-Agent（§7.5）、`normalize.ts` 的 unit test（§7.7）
+- README：架構圖、技術棧、環境變數、常用指令、版權合規說明、技術取捨、已知擴展性上限
 
 ---
 
@@ -237,14 +239,14 @@ create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪�
 
 目前規劃沒特別提到，但實作時大概率會遇到、也值得展示的細節：
 
-1. **抓取失敗的容錯機制**：某個來源 RSS 暫時打不通或格式改版時，不該讓整個排程 job fail，應該 try/catch 個別來源、記錄失敗、其他來源照常執行。
+1. **抓取失敗的容錯機制**：✅ Phase 3 已實作。`scripts/fetch-news.ts` 對每個來源各自 try/catch，單一來源失敗只記錄錯誤訊息、繼續處理下一個來源；全部來源都失敗時也不會 throw，正常結束（`process.exit(0)`）。
 2. **重複執行保護**：✅ Phase 3 已實作。沒有自己寫「最後執行時間」記錄，改用 GitHub Actions 原生的 `concurrency` 設定（`group` + `cancel-in-progress: false`）：同一 group 同時最多一個 run 在執行，新排程時間到了但前一個還沒跑完，就排隊等，不會兩個同時寫入 Supabase。另外加了 `timeout-minutes: 5`（正常執行只需幾秒），避免萬一真的卡住，GitHub 預設 6 小時才強制取消、卡住其間所有排程的問題。
 3. **圖片來源的可靠性**：新聞來源的圖片連結可能會過期或被防盜鏈擋掉，Next.js `next/image` 搭配 `remotePatterns` 設定要注意，必要時做 fallback 圖。
 4. **內容分類的一致性**：不同來源的分類命名不一致（例如「政治」vs「政治軍事」），需要一個 mapping table 統一成你自己的分類系統。
    （去重複的詳細做法已在 4.1 節說明：完全重複靠 unique constraint + upsert，語意重複靠「時間窗口 + 標題正規化比對」，避免隨資料量增加而變慢。）
-5. **Rate limit / 禮貌性請求**：雖然 RSS 是公開資源，但抓取頻率不宜過高（15-30 分鐘一次已足夠），且建議在 request header 帶上合理的 User-Agent 標示這是什麼服務。
-6. **監控**：GitHub Actions 本身有執行紀錄，但可以額外做一個「最後成功抓取時間」的簡單健康檢查頁面或 badge，展示你有維運意識。
-7. **測試**：至少對「欄位正規化」這個函式寫 unit test（不同來源格式輸入 → 統一格式輸出），這是最容易出 bug、也最值得證明你有把關的部分。
+5. **Rate limit / 禮貌性請求**：✅ Phase 6 已實作。抓取頻率維持 15 分鐘一次；`rss-parser` 的 `Parser` 建構時帶上自訂 `User-Agent`（標示服務名稱、repo 連結、非商業用途），避免來源端看到匿名 UA 覺得可疑。
+6. **監控**：GitHub Actions 本身有執行紀錄，但可以額外做一個「最後成功抓取時間」的簡單健康檢查頁面或 badge，展示你有維運意識。（尚未實作，留待之後有感需要再加。）
+7. **測試**：✅ Phase 6 已實作。`scripts/normalize.test.ts` 用 Node 內建 test runner（`node:test` + `node:assert`，沒有另外裝測試框架）涵蓋 `stripHtml` 跟 `titleSimilarity`，包含一組從正式資料庫抓到的真實重複案例當回歸測試，`npm test` 執行。
 8. **資料保留策略**：RSS 本身沒有時間區間查詢功能，只提供來源目前最新的一批項目（通常 20-50 則），無法用 RSS 回填歷史資料，資料庫裡的歷史深度完全取決於排程實際跑了多久。使用者主要關注最新新聞，資料庫不需要無限累積，等資料量成長到有感（例如累積數個月後）再視情況加：
    - 定期（例如每天一次的 cron job）清理或封存超過保留門檻（如 90 天）的舊資料
    - 若想保留完整歷史做其他用途，可改成「封存到另一張 archive 表」而非直接刪除，前台查詢的主表維持精簡
