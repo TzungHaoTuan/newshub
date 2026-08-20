@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import { supabase } from "../lib/supabase";
-import { SOURCES } from "./sources";
+import { SOURCES } from "../lib/sources";
 import { stripHtml, titleSimilarity, DUPLICATE_THRESHOLD } from "./normalize";
 
 interface NormalizedArticle {
