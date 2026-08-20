@@ -30,7 +30,9 @@ async function fetchSource(
 }
 
 // Fetch every source; one source failing (feed down, bad XML) must not stop the rest.
-const parser = new Parser();
+const parser = new Parser({
+  headers: { "User-Agent": "NewsHub/1.0 (+https://github.com/TzungHaoTuan/newshub; personal non-commercial side project)" },
+});
 const allArticles: NormalizedArticle[] = [];
 
 for (const source of SOURCES) {
