@@ -1,6 +1,9 @@
 import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
+// ponytail: Vercel kills functions past maxDuration; EventSource auto-reconnects either way,
+// this just spaces the reconnects out instead of every ~10-60s on the platform default.
+export const maxDuration = 60;
 
 const POLL_INTERVAL_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
