@@ -233,6 +233,13 @@ create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪�
 - 順便補了 §7 提到的兩個低成本項目：RSS 請求帶自訂 User-Agent（§7.5）、`normalize.ts` 的 unit test（§7.7）
 - README：架構圖、技術棧、環境變數、常用指令、版權合規說明、技術取捨、已知擴展性上限
 
+**Phase 7：部署（Vercel）** ✅ 已完成
+
+- Vercel 從 GitHub repo import，push 到 `main` 自動觸發部署
+- 環境變數（`SUPABASE_URL`／`SUPABASE_SECRET_KEY`／`NEXT_PUBLIC_SITE_URL`）設定在 Production and Preview
+- 端到端驗證正式環境：首頁、`/api/news`、`sitemap.xml`、`robots.txt`、JSON-LD、SSE 連線，其中 SSE 在 serverless 環境下的行為需要額外實測，詳見 §9
+- 過程中抓到並修好一個 bug：`NEXT_PUBLIC_SITE_URL` 結尾多打斜線，導致 `sitemap.xml`／`robots.txt` 網址雙斜線（見 §9）
+
 ---
 
 ## 7. 未來建議額外補充的部分
@@ -258,3 +265,20 @@ create index idx_articles_fetched_at on articles (fetched_at desc);  -- SSE 輪�
 
 - 照上面 Phase 1-6 順序逐步進行，每個 Phase 結束後手動驗證再進下一步，避免一次要求 Claude Code 生成整個系統導致架構失控。
 - 每個 Phase 開始前，可以先讓 Claude Code 讀這份計畫文件，再針對該 Phase 給具體指令（例如「請依照 Phase 1 的說明，建立抓取中央社 RSS 的 script」）。
+
+---
+
+## 9. 部署驗證：SSE 在 Vercel Serverless 環境下的行為
+
+上線後針對 `/api/news/stream` 做了一次端到端驗證，結果記錄下來，因為這不是本地開發環境測得出來的。
+
+**目的**：SSE 這條路線本質上是一個「不會結束的回應」（`ReadableStream` 一直開著）。本地用 `next dev` 測沒問題，但 Vercel 的 Route Handler 預設跑在 serverless（Node.js runtime，非 Edge）上——每次請求各自啟動一個函式執行個體，這種執行模型是否真的支援「邊執行邊把資料流出去」，還是會把整個回應緩衝到函式執行結束才一次送出，只能對正式環境實測才知道。
+
+**遇到的問題**：第一次用 `curl -N --max-time 8` 測，8 秒內收到 0 bytes，連 HTTP response header 都沒有。乍看像連線根本沒建立，或被平台悄悄卡住。
+
+**結果**：把 timeout 拉到 20 秒重測，發現 header 加上第一筆 heartbeat（13 bytes 的 `: heartbeat\n\n`）在約 15 秒時一起送達，且連線在 20 秒視窗結束時仍是開啟狀態（`Connection ... left intact`，不是被關閉）。這證明 Vercel 確實把這個回應當串流處理，不是全緩衝——只是「第一個位元組送達的時間」比本地慢了不少，剛好卡在自己設的 15 秒 heartbeat 週期：前 15 秒沒有任何 event 是預期內的（沒有新文章、heartbeat 還沒到），不是平台的問題。
+
+**選擇**：
+- 不改 SSE 的實作方式——`LiveStatus` 元件本來就是等 `EventSource` 真的 open 才顯示 LIVE，正式環境多等十幾秒不影響功能正確性，可接受。
+- 額外加上 `export const maxDuration = 60`（`app/api/news/stream/route.ts`），避免 Vercel 用平台預設的短逾時值提前砍斷這條長連線；就算被砍，`EventSource` 本身有自動重連機制，這個設定只是把重連頻率拉低，成本是一行程式碼。
+- 驗證過程中順手抓到一個真的 bug（跟 SSE 無關）：`NEXT_PUBLIC_SITE_URL` 在 Vercel 上設定時結尾多打了一個 `/`，導致 `sitemap.xml`／`robots.txt` 組出來的網址變成雙斜線（`//sitemap.xml`）。修法是在 `lib/site.ts` 用 `.replace(/\/+$/, "")` 一次性 strip 掉結尾斜線，讓程式碼不管 env var 有沒有手滑多打斜線都安全，比要求自己以後設定時小心不要打錯更可靠。

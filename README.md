@@ -66,6 +66,14 @@ npm run build          # production build
 
 `.github/workflows/fetch-news.yml`：每 15 分鐘觸發一次 `npm run fetch:news`，用 `concurrency` 避免同時有兩個 run 在跑、`timeout-minutes: 5` 避免卡住的 run 占用排程隊列。Supabase 的 `SUPABASE_URL`／`SUPABASE_SECRET_KEY` 存在 repo 的 GitHub Actions secrets 裡，不會出現在程式碼或 log。
 
+## 部署
+
+正式環境：https://newshub-tw.vercel.app
+
+用 Vercel 的 GitHub Integration 部署，push 到 `main` 自動觸發 build + deploy。環境變數（`SUPABASE_URL`／`SUPABASE_SECRET_KEY`／`NEXT_PUBLIC_SITE_URL`）設定在 Vercel 專案的 Production and Preview。
+
+`/api/news/stream` 這條長連線在 Vercel 的 Node.js serverless function 上實測是真的串流（headers 與 heartbeat 會在連線期間陸續送達，不是等函式執行完才整包回傳），但正式環境的「首個位元組送達時間」比本機慢，會卡在目前 15 秒的 heartbeat 週期附近，屬於平台特性、不是 bug；另外加了 `export const maxDuration = 60` 避免平台預設的短逾時值提前砍斷連線。完整驗證過程記錄在計畫書 §9。
+
 ## 版權合規
 
 資料庫**只存標題、摘要、原文連結、來源名稱、發布時間**，不存全文——這是配合以下來源的使用條款：
