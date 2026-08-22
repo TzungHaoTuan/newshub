@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 
 type ConnectionState = "connecting" | "live" | "offline";
 
+// A maxDuration cutoff reconnects in a couple seconds — not worth flashing "offline" for.
+// Only show it if we're still down after this long.
+const OFFLINE_DEBOUNCE_MS = 5000;
+
 export function LiveStatus() {
   const router = useRouter();
   const [state, setState] = useState<ConnectionState>("connecting");
@@ -12,15 +16,25 @@ export function LiveStatus() {
 
   useEffect(() => {
     const source = new EventSource("/api/news/stream");
+    let offlineTimer: ReturnType<typeof setTimeout> | undefined;
 
-    source.onopen = () => setState("live");
-    source.onerror = () => setState("offline");
+    source.onopen = () => {
+      clearTimeout(offlineTimer);
+      setState("live");
+    };
+    source.onerror = () => {
+      clearTimeout(offlineTimer);
+      offlineTimer = setTimeout(() => setState("offline"), OFFLINE_DEBOUNCE_MS);
+    };
     source.addEventListener("news", (event) => {
       const articles = JSON.parse((event as MessageEvent).data) as unknown[];
       setNewCount((count) => count + articles.length);
     });
 
-    return () => source.close();
+    return () => {
+      clearTimeout(offlineTimer);
+      source.close();
+    };
   }, []);
 
   const handleRefresh = () => {

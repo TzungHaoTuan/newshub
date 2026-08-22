@@ -32,6 +32,12 @@ export async function GET(request: Request) {
         }
       };
 
+      // Send something the instant the connection opens: on Vercel, headers + body aren't
+      // flushed to the client until there's a byte to send, so without this the client sees
+      // nothing until the first poll/heartbeat fires. `retry:` also shortens the browser's
+      // default reconnect wait (~3s) after each maxDuration cutoff.
+      controller.enqueue(encoder.encode("retry: 1000\n: connected\n\n"));
+
       const pollTimer = setInterval(poll, POLL_INTERVAL_MS);
       // Idle SSE connections get killed by proxies/browsers without periodic traffic.
       const heartbeatTimer = setInterval(() => {
