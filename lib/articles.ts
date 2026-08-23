@@ -29,7 +29,7 @@ export async function getArticles({ category, source, tag, page = 1, pageSize = 
 
   let query = supabase
     .from("articles")
-    .select("id, source, category, tags, title, summary, link, published_at", { count: "exact" })
+    .select("id, source, category, tags, title, summary, link, published_at", { count: "estimated" })
     .is("duplicate_of", null); // 只回傳非重複文章，語意重複的合併顯示留給未來的前端擴充
 
   if (category) query = query.eq("category", category);

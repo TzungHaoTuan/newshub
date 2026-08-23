@@ -128,6 +128,18 @@ const { data } = await supabase
   .range(offset, offset + pageSize - 1);
 ```
 
+**分頁計數（count）策略**：`getArticles()` 一開始用 `count: "exact"`——每次查詢在回傳這頁資料的同時，也精確算出符合篩選條件的總筆數，給 `Pagination` 元件算頁碼、判斷「是否還有下一頁」用。PostgREST 支援三種 count 模式：
+
+| 模式 | 機制 | 準確度 | 成本 |
+| --- | --- | --- | --- |
+| `exact`（原本採用） | 對篩選後的結果做真正的 `COUNT(*)`，跟資料查詢包在同一個 window function、同一次請求裡送出 | 精確 | 隨符合篩選條件的列數增加；因為跟資料查詢同一個 round-trip，這個成本會直接算進使用者切換分類／分頁時的等待時間，不是獨立的背景成本 |
+| `planned` | 不掃資料表，改讀 Postgres 統計資訊（跟 `EXPLAIN` 估計列數同一套機制） | 可能有落差，尤其統計資訊剛好過時 | 幾乎常數時間 |
+| `estimated`（改用後） | 先用 `planned` 估一次；估計值夠小就回頭做一次真正的 `exact`，估計值大就直接用估算值 | 資料量小時精確、大時近似 | 小表跟 `exact` 一樣準，大表接近 `planned` 的速度 |
+
+**改用 `estimated` 的原因**：這個 side project 資料量目前不大，`exact` 感覺不到延遲，但這是值得記錄的效能取捨——PostgREST 把 count 跟資料查詢包在同一次請求裡，不是背景非同步算的，所以 `exact` 的成本不是「多算一個數字」，是直接疊加在每次頁面回應時間上，且會隨篩選後的資料量線性增加。換成 `estimated` 後，代價只在分頁最後一兩頁的邊界可能因估計誤差而跟真實筆數對不上（例如「下一頁」按鈕在邊界上誤判要不要 disable），不影響實際顯示的文章內容是否正確。
+
+改動範圍只有 `lib/articles.ts` 裡 `.select(..., { count: "estimated" })` 這一行；`getArticles()` 同時被 `/api/news` 跟首頁 Server Component 共用，兩邊都受益，不用分別改。
+
 - `GET /api/news/stream`：SSE endpoint，資料庫有新資料時推播事件給前端
 
 **實作細節（Phase 4 已完成）**：

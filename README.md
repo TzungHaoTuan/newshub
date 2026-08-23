@@ -91,6 +91,7 @@ npm run build          # production build
 - **手寫 Supabase 型別，不用 CLI 產生**：`supabase gen types typescript` 需要另外申請 personal access token，且目前 dashboard 沒有免 token 的複製貼上入口。改成依照實際 schema 手寫 `Database` type（`lib/database.types.ts`），效果一樣有型別檢查，只是 schema 改了要記得手動同步。
 - **語意去重複用字元 bigram，不用 NLP 斷詞**：中文沒有空格分詞，真正的詞彙 tokenization 需要斷詞函式庫，不符合這個規模的投入產出比。改用「每兩個字」切 bigram 集合算重疊係數，字串層級比對就夠用，比對範圍限制在「過去 48 小時」，不會隨資料量增加而變慢。
 - **不做站內文章詳情頁**：卡片直接連回原文連結（也是版權合規的要求之一），所以 SEO 的 JSON-LD 用 `ItemList` 包 `NewsArticle` 標記整個列表頁，而不是逐篇文章各自的結構化資料。
+- **分頁計數用 `count: "estimated"`，不用 `exact`**：PostgREST 的 count 有三種模式——`exact`（精確但要對篩選後的結果做真正的 `COUNT(*)`）、`planned`（純吃 Postgres 統計資訊估算，快但可能失準）、`estimated`（資料量小時退回 exact、大時用 planned 估算的混合策略）。因為 count 跟資料查詢包在同一次 PostgREST 請求裡送出，`exact` 的成本會直接算進每次切換分類／分頁的等待時間，不是獨立的背景成本。換成 `estimated` 後，代價只在分頁最後一兩頁的邊界可能因估計誤差而輕微不準，不影響實際顯示的文章內容，換來的是查詢成本不會隨資料量線性增加。詳細比較見計畫書 §4.3。
 
 ## 已知的擴展性上限
 
