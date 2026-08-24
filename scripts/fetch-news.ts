@@ -29,21 +29,22 @@ async function fetchSource(
   }));
 }
 
-// Fetch every source; one source failing (feed down, bad XML) must not stop the rest.
+// Fetch every source in parallel (each is a distinct domain); one source failing must not stop the rest.
 const parser = new Parser({
   headers: { "User-Agent": "NewsHub/1.0 (+https://github.com/TzungHaoTuan/newshub; personal non-commercial side project)" },
 });
 const allArticles: NormalizedArticle[] = [];
 
-for (const source of SOURCES) {
-  try {
-    const articles = await fetchSource(parser, source);
-    allArticles.push(...articles);
-    console.log(`${source.name}: fetched ${articles.length} articles`);
-  } catch (err) {
-    console.error(`${source.name}: fetch failed —`, err instanceof Error ? err.message : err);
+const results = await Promise.allSettled(SOURCES.map((source) => fetchSource(parser, source)));
+results.forEach((result, i) => {
+  const source = SOURCES[i];
+  if (result.status === "fulfilled") {
+    allArticles.push(...result.value);
+    console.log(`${source.name}: fetched ${result.value.length} articles`);
+  } else {
+    console.error(`${source.name}: fetch failed —`, result.reason instanceof Error ? result.reason.message : result.reason);
   }
-}
+});
 
 if (allArticles.length === 0) {
   console.log("no articles fetched from any source, nothing to upsert");
